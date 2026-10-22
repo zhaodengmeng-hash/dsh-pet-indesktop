@@ -45,6 +45,7 @@ WINDOW_SCOPE_IDS = (
     "shift_drag",
     "cursor_hidden_passthrough",
     "auto_hide_fullscreen",
+    "mouse_through_on_fullscreen",
 )
 
 SCOPE_NOTE = "（对所有桌宠生效）"

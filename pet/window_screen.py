@@ -94,7 +94,11 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
                     if stop.wait(backoff):
                         return
         now = clock()
-        if not host.auto_hide_fullscreen or now < next_fullscreen:
+        # 两个消费者共用这一拍：自动隐藏（auto_hide_fullscreen）与全屏自动穿透
+        # （mouse_through_on_fullscreen）。只看前者会让"不隐藏但要穿透"的配置
+        # 永不探测 → 穿透永远不触发。
+        if (not host.auto_hide_fullscreen and not fs_through_enabled(host)) \
+                or now < next_fullscreen:
             continue
         next_fullscreen = now + 1.0
         try:
@@ -103,7 +107,10 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
             logging.exception("全屏检测异常")
             continue
         polls += 1
-        if hit != host._fs_last:
+        # ``_fs_last`` 由 PetWindow.__init__ 建立；测试/自定义宿主可能没有这一位，
+        # 缺省按"上次不命中"处理，别让一条 AttributeError 把监视线程打死。
+        fs_last = bool(getattr(host, "_fs_last", False))
+        if hit != fs_last:
             host._fs_last = hit
             logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
             if shiboken6.isValid(host) is False:
@@ -117,13 +124,23 @@ def cursor_hidden_passthrough_enabled(host) -> bool:
     return host._cursor_hidden_passthrough
 
 
+def fs_through_enabled(host) -> bool:
+    """全屏自动穿透开关（config: mouse_through_on_fullscreen，本仓补丁）。"""
+    try:
+        return bool(host.cfg.get('mouse_through_on_fullscreen', True))
+    except Exception:
+        return False
+
+
 def watch_required(host) -> bool:
     # Offscreen Qt has no native foreground/fullscreen surface.  Avoid
     # starting a Windows watcher against a headless QObject, where native
     # teardown can race the polling thread during test/process shutdown.
     if os.environ.get('QT_QPA_PLATFORM', '').lower() == 'offscreen':
         return False
-    return os.name == 'nt' and (host.auto_hide_fullscreen or host._cursor_hidden_passthrough_enabled())
+    return os.name == 'nt' and (host.auto_hide_fullscreen
+                                or host._cursor_hidden_passthrough_enabled()
+                                or fs_through_enabled(host))
 
 
 def cursor_transition_blocked(host) -> bool:
@@ -161,8 +178,13 @@ def on_cursor_visibility_changed(host, visibility: str, *, monotonic=None) -> No
 def on_fullscreen_changed(host, hit: bool) -> None:
     """主线程：全屏出现 → 隐藏桌宠；全屏退出 → 恢复。"""
     logging.info("全屏状态变化 hit=%s auto_hidden=%s visible=%s", hit, host._auto_hidden, host.isVisible())
+    # 全屏自动穿透（本仓补丁）：命中即点不到，退场恢复；与自动隐藏互不连带。
+    fs_through = bool(hit and fs_through_enabled(host))
+    if fs_through != getattr(host, '_auto_fullscreen_through', False):
+        host._auto_fullscreen_through = fs_through
+        host._apply_effective_mouse_through()
     if hit:
-        if not host._auto_hidden and host.isVisible():
+        if host.auto_hide_fullscreen and not host._auto_hidden and host.isVisible():
             host._auto_hidden = True
             host._speech_bubble.hide()
             host.hide(notify=False)  # 自动隐藏是内部语义，不弹"桌宠已隐藏"托盘通知
@@ -183,6 +205,25 @@ def set_auto_hide_fullscreen(host, on: bool) -> None:
     if not host.auto_hide_fullscreen and host._auto_hidden:
         host._auto_hidden = False
         host.show()
+
+
+def set_mouse_through_on_fullscreen(host, on: bool) -> None:
+    """全屏自动穿透开关（本仓补丁，config: mouse_through_on_fullscreen）。
+
+    与 ``auto_hide_fullscreen`` 各管各的：关掉本项只把全屏穿透态擦掉，不动隐藏；
+    监视线程按「还有别的消费者吗」重算启停。
+    """
+    on = bool(on)
+    host._fs_through = on
+    host.cfg.set('mouse_through_on_fullscreen', on)
+    host.cfg.save()
+    if not on:
+        host._auto_fullscreen_through = False
+        host._apply_effective_mouse_through()
+    if host._watch_required():
+        host._start_fs_watch()
+    elif not host._auto_hidden:
+        host._stop_fs_watch()
 
 
 def set_cursor_hidden_passthrough(host, on: bool) -> None:

@@ -865,6 +865,11 @@ def test_overlay_fullscreen_exit_settles_after_overlay_is_shown(qapp):
     shell = type("Shell", (), {
         "_auto_hidden": False,
         "overlay": overlay,
+        # 全屏自动穿透（本仓补丁）读的两位：_config 给默认（auto_hide 默认 True、
+        # 穿透默认 True），穿透下发在桩里直接空操作（本用例只钉隐藏/结算次序）。
+        "_config": {},
+        "_auto_fullscreen_through": False,
+        "_apply_effective_mouse_through": lambda self: None,
         # 整组显隐走宿主循环（多屏）：本桩只有这一张窗，三个入口都落到它上面
         "_any_host_visible": lambda self: overlay.isVisible(),
         "_show_all_hosts": lambda self: overlay.show(),

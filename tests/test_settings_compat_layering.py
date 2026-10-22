@@ -118,6 +118,7 @@ def test_cursor_passthrough_is_back_in_the_window_group(tmp_path, monkeypatch):
         assert [r.objectName() for r in section.rows] == [
             "settingRow_on_top",
             "settingRow_auto_hide_fullscreen",
+            "settingRow_mouse_through_on_fullscreen",
             "settingRow_cursor_hidden_passthrough",
             "settingRow_cross_screen",
         ]

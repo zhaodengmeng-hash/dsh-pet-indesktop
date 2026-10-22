@@ -1336,6 +1336,9 @@ class OverlayShell(QObject):
         self._auto_hidden = False
         self._user_mouse_through = bool(self._config.get("mouse_through", False))
         self._auto_cursor_hidden = False
+        # 全屏自动穿透态（config: mouse_through_on_fullscreen）。运行态、不落盘，
+        # 与「用户手动穿透」「光标隐藏穿透」并列，是有效穿透的三个来源之一。
+        self._auto_fullscreen_through = False
         self._cursor_restore_pending = False
         # 收敛请求的待办：被 grab 闸挡住的收敛不许丢弃，由 grab 收尾补做
         # （见 _converge_auto_cursor_hidden / _on_grab_finished）。
@@ -4682,13 +4685,20 @@ class OverlayShell(QObject):
         设置只在主屏生效）。
         """
         self._user_mouse_through = bool(self._config.get("mouse_through", False))
+        fs_hide_on = bool(self._config.get("auto_hide_fullscreen", True))
+        fs_through_on = bool(self._config.get("mouse_through_on_fullscreen", True))
+        if not fs_through_on:
+            # 关掉「全屏时穿透」的同一拍必须把穿透态擦掉，否则窗口停在"点不到"，
+            # 用户看到的就是"这个开关关不掉"。
+            self._auto_fullscreen_through = False
         self._apply_effective_mouse_through()
         self.set_on_top(bool(self._config.get("on_top", True)), persist=False)
         for host in self._hosts:
             self._apply_host_window_caps(host)
         self._sync_sprite_settings()
-        self._watcher.set_fullscreen_enabled(
-            bool(self._config.get("auto_hide_fullscreen", True)))
+        # 全屏监视线程有两个消费者：自动隐藏与自动穿透。只按隐藏开关判定，会让
+        # "不隐藏但穿透"的配置永远收不到全屏事件（穿透也就不生效）。
+        self._watcher.set_fullscreen_enabled(fs_hide_on or fs_through_on)
         self._watcher.set_cursor_enabled(
             bool(self._config.get("cursor_hidden_passthrough", True)))
         # 预测预热提前量（config predict_prewarm_lead_ms，范围 200-600，0=关）
@@ -4712,7 +4722,8 @@ class OverlayShell(QObject):
         overlay = host.overlay
         self.set_on_top(bool(self._config.get("on_top", True)), persist=False)
         overlay.mouse_through = bool(
-            self._user_mouse_through or self._auto_cursor_hidden)
+            self._user_mouse_through or self._auto_cursor_hidden
+            or self._auto_fullscreen_through)
         # M5a/M5b：拖拽闸门（锁定位 / SHIFT 门）推到 overlay——命中按下不进
         # 拖拽 grab，点击语义保留（legacy window.py:3126-3133 / :3172-3181）
         overlay.lock_position = bool(self._config.get("lock_position", False))
@@ -4936,12 +4947,16 @@ class OverlayShell(QObject):
         return bool(self._sprite_config(sprite).get("collision_enabled", True))
 
     def _apply_effective_mouse_through(self) -> None:
-        """有效穿透 = 用户手动穿透 OR 光标自动穿透（window.py:4204 同式）。
+        """有效穿透 = 用户手动穿透 OR 光标自动穿透 OR 全屏自动穿透。
+
+        前两项与 window.py:4204 同式；第三项是本仓补丁引入的
+        ``mouse_through_on_fullscreen``（全屏游戏/视频里点不到桌宠，退出即恢复）。
 
         逐宿主下发：穿透/避让都是"整组桌宠"的状态，只给主屏窗口设会让副屏那张
         overlay 一直吞点击（用户看到的是"副屏的宠盖住了我的桌面"）。
         """
-        through = bool(self._user_mouse_through or self._auto_cursor_hidden)
+        through = bool(self._user_mouse_through or self._auto_cursor_hidden
+                       or self._auto_fullscreen_through)
         for host in self._hosts:
             host.overlay.mouse_through = through
 
@@ -4977,9 +4992,21 @@ class OverlayShell(QObject):
         # 显示回来之后再结算——结束汇报只投向可见目标，早一拍就是汇报给空气。
         from . import quiet_mode
 
+        # 全屏自动穿透（本仓补丁，config: mouse_through_on_fullscreen）：命中即把
+        # 窗口设成点不到，退场恢复。必须落在隐藏分支**之前**——那个分支末尾是
+        # `return`，写在后面会被"自动隐藏开着"的配置整条跳过。
+        fs_through_on = bool(self._config.get("mouse_through_on_fullscreen", True))
+        new_fs_through = bool(hit and fs_through_on)
+        if new_fs_through != self._auto_fullscreen_through:
+            self._auto_fullscreen_through = new_fs_through
+            self._apply_effective_mouse_through()
+
         if hit:
             quiet_mode.note_fullscreen(True)
-            if not self._auto_hidden and self._any_host_visible():
+            # 自动隐藏看自己的开关：只开穿透、没开隐藏时不许把宠藏起来（否则
+            # "全屏时还能看见、只是点不到"这个组合永远试不出来）。
+            if (self._config.get("auto_hide_fullscreen", True)
+                    and not self._auto_hidden and self._any_host_visible()):
                 self._auto_hidden = True
                 self._hide_bubble_for_visibility()
                 self._set_all_clips_paused(True)

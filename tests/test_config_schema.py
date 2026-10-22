@@ -108,6 +108,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "modern_chat_background_opacity",
         "modern_chat_card_opacity",
         "mouse_through",
+        "mouse_through_on_fullscreen",
         "music_browser_media_enabled",
         "foobar_lyrics_enabled",
         "foobar_title_format",

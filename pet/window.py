@@ -438,10 +438,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._ffmpeg_recycle_minutes = self._recycle_minutes_from(config)
         self._user_mouse_through = bool(config.get('mouse_through', False))
         self._auto_cursor_hidden = False
+        # 全屏自动穿透态（config: mouse_through_on_fullscreen，本仓补丁）
+        self._auto_fullscreen_through = False
         self._cursor_visibility = 'UNKNOWN'
         self._cursor_hidden_since: float | None = None
         self._cursor_restore_pending = False
         self._cursor_hidden_passthrough = bool(config.get('cursor_hidden_passthrough', True))
+        # 全屏自动穿透（本仓补丁）：开关快照，供运行期同步与会话内查询。
+        self._fs_through = bool(config.get('mouse_through_on_fullscreen', True))
         self.mouse_through: bool = self._user_mouse_through
         self.drag_physics: bool = bool(config.get('drag_physics', False))
         self.lock_position: bool = bool(config.get('lock_position', False))
@@ -1458,6 +1462,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     def set_cursor_hidden_passthrough(self, *args, **kwargs):
         """Compatibility delegation (window_screen.set_cursor_hidden_passthrough)."""
         return window_screen.set_cursor_hidden_passthrough(self, *args, **kwargs)
+
+    def set_mouse_through_on_fullscreen(self, *args, **kwargs):
+        """Compatibility delegation (window_screen.set_mouse_through_on_fullscreen)."""
+        return window_screen.set_mouse_through_on_fullscreen(self, *args, **kwargs)
 
     def set_stream_capture_mode(self, *args, **kwargs):
         """Compatibility delegation (window_screen.set_stream_capture_mode)."""
@@ -3851,6 +3859,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         desired_auto_hide = bool(self.cfg.get('auto_hide_fullscreen', True))
         if desired_auto_hide != self.auto_hide_fullscreen:
             self.set_auto_hide_fullscreen(desired_auto_hide)
+        desired_fs_through = bool(self.cfg.get('mouse_through_on_fullscreen', True))
+        if desired_fs_through != self._fs_through:
+            self.set_mouse_through_on_fullscreen(desired_fs_through)
         desired_stream_capture = bool(self.cfg.get('stream_capture_mode', False))
         if desired_stream_capture != self._stream_capture_mode:
             from . import overlay_settings_command
@@ -4095,7 +4106,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             )
 
     def _apply_effective_mouse_through(self, enabled: bool | None = None) -> None:
-        effective = (bool(self._user_mouse_through or self._auto_cursor_hidden)
+        effective = (bool(self._user_mouse_through or self._auto_cursor_hidden
+                          or self._auto_fullscreen_through)
                      if enabled is None else bool(enabled))
         if effective == self.mouse_through:
             return

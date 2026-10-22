@@ -623,9 +623,54 @@ def test_fullscreen_hides_and_restores(tmp_path):
 
 
 def test_fullscreen_hidden_stays_when_config_off(tmp_path):
-    shell = _make_shell(tmp_path, {"auto_hide_fullscreen": False})
-    # 配置关 → watcher 全屏门未启用（计时器未开）
+    # 两个全屏消费者都关 → watcher 全屏门未启用（计时器未开）。
+    # 只关 auto_hide_fullscreen 不够：全屏自动穿透（mouse_through_on_fullscreen）
+    # 默认开着，它同样需要这个监视器（见 test_fullscreen_watcher_runs_for_through_alone）。
+    shell = _make_shell(tmp_path, {"auto_hide_fullscreen": False,
+                                   "mouse_through_on_fullscreen": False})
     assert not shell._watcher._fs_timer.isActive()
+    shell._delete_runtime_marker()
+
+
+def test_fullscreen_click_through_on_and_off(tmp_path):
+    """全屏自动穿透（widget 级补丁）：命中即点不到，退场立刻恢复可点。
+
+    与自动隐藏互不连带——``auto_hide_fullscreen`` 关着时桌宠必须**留在屏幕上**，
+    只是点不到；这正是"全屏游戏里能看见但不吃点击"的组合。
+    """
+    shell = _make_shell(tmp_path, {"auto_hide_fullscreen": False,
+                                   "mouse_through_on_fullscreen": True})
+    shell.overlay.show()
+    assert shell.overlay.mouse_through is False
+    shell._on_fullscreen_changed(True)
+    assert shell._auto_fullscreen_through is True
+    assert shell.overlay.mouse_through is True, "全屏命中必须点不到"
+    assert shell._auto_hidden is False, "只开穿透不许把宠藏起来"
+    assert shell.overlay.isVisible()
+    shell._on_fullscreen_changed(False)
+    assert shell._auto_fullscreen_through is False
+    assert shell.overlay.mouse_through is False, "退场必须恢复可点"
+    shell.overlay.close()
+    shell._delete_runtime_marker()
+
+
+def test_fullscreen_click_through_respects_config_off(tmp_path):
+    shell = _make_shell(tmp_path, {"auto_hide_fullscreen": False,
+                                   "mouse_through_on_fullscreen": False})
+    shell.overlay.show()
+    shell._on_fullscreen_changed(True)
+    assert shell.overlay.mouse_through is False
+    shell._on_fullscreen_changed(False)
+    assert shell.overlay.mouse_through is False
+    shell.overlay.close()
+    shell._delete_runtime_marker()
+
+
+def test_fullscreen_watcher_runs_for_through_alone(tmp_path):
+    """只开穿透、关掉自动隐藏时，全屏监视线程仍必须启用（否则穿透永不触发）。"""
+    shell = _make_shell(tmp_path, {"auto_hide_fullscreen": False,
+                                   "mouse_through_on_fullscreen": True})
+    assert shell._watcher._fs_timer.isActive()
     shell._delete_runtime_marker()
 
 

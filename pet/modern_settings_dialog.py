@@ -544,6 +544,12 @@ class ModernSettingsDialog(QDialog):
                 [
                     SettingRow("auto_hide_fullscreen", "全屏时自动隐藏", "全屏游戏或视频期间自动隐藏桌宠。", self.auto_hide_fullscreen_check),
                     SettingRow(
+                        "mouse_through_on_fullscreen",
+                        "全屏时鼠标穿透",
+                        "全屏游戏或视频期间桌宠点不到（点击落到游戏里），退出全屏立即恢复可点。想让它全屏里也能被点到就关掉这一项。",
+                        self.mouse_through_on_fullscreen_check,
+                    ),
+                    SettingRow(
                         "cursor_hidden_passthrough",
                         "光标隐藏时自动穿透",
                         "Windows 光标隐藏后，桌宠自动穿透点击；光标出现立即恢复。适用于游戏，也可能影响自动隐藏光标的视频播放器。",
@@ -1831,7 +1837,7 @@ class ModernSettingsDialog(QDialog):
                 ("应用启动", claim("autostart")),
                 # 「光标隐藏时自动穿透」回主组：它也是窗口旗标类偏好（与置顶/全屏隐藏同族），
                 # 用户找它会先看这一组；原先跟「直播捕获」一起塞进"Windows 兼容"是埋掉了它。
-                ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "cross_screen")),
+                ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "mouse_through_on_fullscreen", "cursor_hidden_passthrough", "cross_screen")),
                 # 「直播捕获兼容」单独进一层折叠：行说明有四段（重启级切换、OBS 捕获方式、
                 # 平台限制、作用域），平铺在首屏就是逼用户读完。组描述只写一句"这一项做什么"，
                 # 重启/平台限制/作用域全部留在行内（展开即见全文），搜索照旧可达。
@@ -2392,6 +2398,11 @@ class ModernSettingsDialog(QDialog):
             self.config.set("balance_tier_color_enabled", self.balance_tier_color_check.isChecked())
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
+        if self.mouse_through_on_fullscreen_check is not None:
+            self.config.set(
+                "mouse_through_on_fullscreen",
+                self.mouse_through_on_fullscreen_check.isChecked(),
+            )
         if getattr(self, "cross_screen_check", None) is not None:
             self.config.set("allow_cross_screen", self.cross_screen_check.isChecked())
         # 「单进程多开」键不落盘控件值：开关已隐藏（拓扑收口 Phase A），

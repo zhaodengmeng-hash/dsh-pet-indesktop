@@ -169,6 +169,7 @@ OVERLAY_WINDOW_SCOPE_IDS = (
     "shift_drag",
     "cursor_hidden_passthrough",
     "auto_hide_fullscreen",
+    "mouse_through_on_fullscreen",
 )
 
 
@@ -496,10 +497,15 @@ def build_pet_controls(host) -> None:
         host.balance_tier_color_check = ToggleSwitch(host)
         host.balance_tier_color_check.setChecked(bool(host.config.get("balance_tier_color_enabled", True)))
     host.auto_hide_fullscreen_check = None
+    host.mouse_through_on_fullscreen_check = None
     host.stream_capture_check = None
     if sys.platform == "win32":
         host.auto_hide_fullscreen_check = ToggleSwitch(host)
         host.auto_hide_fullscreen_check.setChecked(bool(host.config.get("auto_hide_fullscreen", True)))
+        # 全屏时鼠标穿透（本仓补丁）：全屏游戏/视频里点不到桌宠，退出即恢复。
+        host.mouse_through_on_fullscreen_check = ToggleSwitch(host)
+        host.mouse_through_on_fullscreen_check.setChecked(
+            bool(host.config.get("mouse_through_on_fullscreen", True)))
         host.stream_capture_check = ToggleSwitch(host)
         host.stream_capture_check.setChecked(bool(host.config.get("stream_capture_mode", False)))
         # F03（2026-10-10 终审）：这里**不**按身份置灰。旧实现的理由是"子宠页保存只写

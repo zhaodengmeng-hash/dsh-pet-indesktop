@@ -294,7 +294,9 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 交互，没有新页面/新控件组可拆，按「拆不动则校准到实测」处理。
 # 2026-10-19 上调到 2600（同一处再 +6：`eventFilter` 加修饰键闸门——只拦裸键/小键盘键，
 # 带 Ctrl/Alt/Shift 的 ↑↓ 透传，避免抢走输入法候选导航）。仍是键盘边界，同上处理。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2600
+# 2026-10-23 上调到 2615（+15：本仓「全屏时鼠标穿透」开关——窗口与系统组新增一行
+# SettingRow 及其落盘一行，无新页面/新控件组可拆，仍是既有窗口旗标族的同类行）。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2615
 
 
 def _read(name: str) -> str:

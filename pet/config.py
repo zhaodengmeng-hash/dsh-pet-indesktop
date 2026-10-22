@@ -1122,6 +1122,10 @@ class Config:
             "dialogue_last_scope": "",  # 台词编辑上次打开的层（""=全局；设置页专属文案入口记忆）
             "mouse_through": False,
             "cursor_hidden_passthrough": True,
+            # 全屏应用（游戏 / 全屏视频）时的自动鼠标穿透：全屏命中即把窗口设成
+            # 点不到，退出全屏立刻恢复可点。与 mouse_through（用户手动意愿）分开
+            # 记，互不覆盖——手动关穿透不会关掉这条，反之亦然。
+            "mouse_through_on_fullscreen": True,
             "drag_physics": False,
             "drop_gravity": False,  # 静止放手下落：低速松手零初速受重力落地（#219，默认关=旧行为）
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
@@ -1486,6 +1490,7 @@ class Config:
             "self_talk_bubble_style",
             "mouse_through",
             "cursor_hidden_passthrough",
+            "mouse_through_on_fullscreen",
             "drag_physics",
             "drop_gravity",
             "dialogue_mode",
@@ -1926,6 +1931,7 @@ class Config:
         self.data["animation_gap_seconds"] = _float_or_default(self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0)
         self.data["self_talk_voice_precache_enabled"] = _bool_or_default(self.data.get("self_talk_voice_precache_enabled"), False)
         self.data["cursor_hidden_passthrough"] = _bool_or_default(self.data.get("cursor_hidden_passthrough"), True)
+        self.data["mouse_through_on_fullscreen"] = _bool_or_default(self.data.get("mouse_through_on_fullscreen"), True)
         self.data["allow_cross_screen"] = _bool_or_default(self.data.get("allow_cross_screen"), False)
         self.data["spawn_inherit_size"] = _bool_or_default(self.data.get("spawn_inherit_size"), True)
         self.data["spawn_scale"] = _float_or_default(self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0)
