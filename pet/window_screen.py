@@ -50,6 +50,11 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
 
     ``monotonic`` 是兼容 seam：PetWindow 委托注入 pet.window.time.monotonic
     （测试 patch 该命名空间的时钟），缺省回退本模块标准库时钟。
+
+    **整段循环体套一层 try/except**（2026-10-25 现场事故）：窗口重建 / 换角色时
+    宿主包装器会短暂处于"``isValid`` 仍为真、属性访问却抛 RuntimeError"的窗口期，
+    而这条线程没有外层 except ⇒ 一抛就静默死掉，全屏穿透与自动隐藏**同时**失效，
+    日志里只留下"心跳停了"这一个线索。现在任何异常都记一条 traceback 并继续下一拍。
     """
     clock = monotonic if monotonic is not None else _fs_monotonic
     stop = host._fs_stop
@@ -59,65 +64,75 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
     consecutive_errors = 0
     next_fullscreen = clock() + 1.0
     while not stop.wait(0.05):
-        # destroyed 连接使用的是同一个纯 Python Event；在访问 QObject
-        # 包装器前再次检查，覆盖 wait 返回与 Qt 销毁之间的竞态窗口。
-        if stop.is_set():
-            return
-        if shiboken6.isValid(host) is False:
-            return
-        if host._cursor_hidden_passthrough_enabled():
-            try:
-                visibility = vision_mod.get_cursor_visibility()
-                if shiboken6.isValid(host) is False:
-                    return
-                host.cursor_visibility_changed.emit(visibility)
-                consecutive_errors = 0
-            except (RuntimeError, AttributeError) as exc:
-                if shiboken6.isValid(host) is False:
-                    return
-                consecutive_errors += 1
-                backoff = 1.0 if consecutive_errors == 1 else (2.0 if consecutive_errors == 2 else 5.0)
-                logging.debug("光标状态检测瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
-                if stop.wait(backoff):
-                    return
-            except Exception:
+        try:
+            # destroyed 连接使用的是同一个纯 Python Event；在访问 QObject
+            # 包装器前再次检查，覆盖 wait 返回与 Qt 销毁之间的竞态窗口。
+            if stop.is_set():
+                return
+            if shiboken6.isValid(host) is False:
+                return
+            if host._cursor_hidden_passthrough_enabled():
                 try:
+                    visibility = vision_mod.get_cursor_visibility()
                     if shiboken6.isValid(host) is False:
                         return
-                    host.cursor_visibility_changed.emit('UNKNOWN')
+                    host.cursor_visibility_changed.emit(visibility)
+                    consecutive_errors = 0
                 except (RuntimeError, AttributeError) as exc:
                     if shiboken6.isValid(host) is False:
                         return
                     consecutive_errors += 1
                     backoff = 1.0 if consecutive_errors == 1 else (2.0 if consecutive_errors == 2 else 5.0)
-                    logging.debug("光标状态降级发射瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
+                    logging.debug("光标状态检测瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
                     if stop.wait(backoff):
                         return
-        now = clock()
-        # 两个消费者共用这一拍：自动隐藏（auto_hide_fullscreen）与全屏自动穿透
-        # （mouse_through_on_fullscreen）。只看前者会让"不隐藏但要穿透"的配置
-        # 永不探测 → 穿透永远不触发。
-        if (not host.auto_hide_fullscreen and not fs_through_enabled(host)) \
-                or now < next_fullscreen:
-            continue
-        next_fullscreen = now + 1.0
-        try:
-            hit, detail = host._fg_fullscreen_probe()
+                except Exception:
+                    try:
+                        if shiboken6.isValid(host) is False:
+                            return
+                        host.cursor_visibility_changed.emit('UNKNOWN')
+                    except (RuntimeError, AttributeError) as exc:
+                        if shiboken6.isValid(host) is False:
+                            return
+                        consecutive_errors += 1
+                        backoff = 1.0 if consecutive_errors == 1 else (2.0 if consecutive_errors == 2 else 5.0)
+                        logging.debug("光标状态降级发射瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
+                        if stop.wait(backoff):
+                            return
+            now = clock()
+            # 两个消费者共用这一拍：自动隐藏（auto_hide_fullscreen）与全屏自动穿透
+            # （mouse_through_on_fullscreen）。只看前者会让"不隐藏但要穿透"的配置
+            # 永不探测 → 穿透永远不触发。
+            through_on = fs_through_enabled(host)
+            if (not host.auto_hide_fullscreen and not through_on) \
+                    or now < next_fullscreen:
+                continue
+            if polls % 60 == 0:
+                # 每 ~60 拍留一条门状态：现场"穿透没生效"时先能确认探测到底有没有跑
+                logging.info("全屏门 heartbeat auto_hide=%s through=%s",
+                             bool(host.auto_hide_fullscreen), through_on)
+            next_fullscreen = now + 1.0
+            try:
+                hit, detail = host._fg_fullscreen_probe()
+            except Exception:
+                logging.exception("全屏检测异常")
+                continue
+            polls += 1
+            # ``_fs_last`` 由 PetWindow.__init__ 建立；测试/自定义宿主可能没有这一位，
+            # 缺省按"上次不命中"处理，别让一条 AttributeError 把监视线程打死。
+            fs_last = bool(getattr(host, "_fs_last", False))
+            if hit != fs_last:
+                host._fs_last = hit
+                logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
+                if shiboken6.isValid(host) is False:
+                    return
+                host.fullscreen_changed.emit(hit)
+            elif polls % 15 == 0:
+                logging.info("全屏检测心跳 hit=%s %s", hit, detail)
         except Exception:
-            logging.exception("全屏检测异常")
-            continue
-        polls += 1
-        # ``_fs_last`` 由 PetWindow.__init__ 建立；测试/自定义宿主可能没有这一位，
-        # 缺省按"上次不命中"处理，别让一条 AttributeError 把监视线程打死。
-        fs_last = bool(getattr(host, "_fs_last", False))
-        if hit != fs_last:
-            host._fs_last = hit
-            logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
-            if shiboken6.isValid(host) is False:
+            logging.exception("全屏/光标监视线程异常（继续）")
+            if stop.wait(1.0):
                 return
-            host.fullscreen_changed.emit(hit)
-        elif polls % 15 == 0:
-            logging.info("全屏检测心跳 hit=%s %s", hit, detail)
 
 
 def cursor_hidden_passthrough_enabled(host) -> bool:
@@ -125,11 +140,26 @@ def cursor_hidden_passthrough_enabled(host) -> bool:
 
 
 def fs_through_enabled(host) -> bool:
-    """全屏自动穿透开关（config: mouse_through_on_fullscreen，本仓补丁）。"""
+    """全屏自动穿透开关（config: mouse_through_on_fullscreen，本仓补丁）。
+
+    缺键 / None 都按**默认开**处理：这个键是后加的，老 config 里没有它；任何
+    把"缺失"读成 False 的路径都会让穿透静默失效（2026-10-25 现场就是这么坏的）。
+    """
     try:
-        return bool(host.cfg.get('mouse_through_on_fullscreen', True))
+        cfg = host.cfg
     except Exception:
         return False
+    try:
+        value = cfg.get('mouse_through_on_fullscreen', True)
+    except TypeError:
+        # 某些配置视图的 get 只收一个参数
+        try:
+            value = cfg.get('mouse_through_on_fullscreen')
+        except Exception:
+            return False
+    except Exception:
+        return False
+    return True if value is None else bool(value)
 
 
 def watch_required(host) -> bool:
@@ -182,7 +212,11 @@ def on_fullscreen_changed(host, hit: bool) -> None:
     fs_through = bool(hit and fs_through_enabled(host))
     if fs_through != getattr(host, '_auto_fullscreen_through', False):
         host._auto_fullscreen_through = fs_through
-        host._apply_effective_mouse_through()
+        try:
+            host._apply_effective_mouse_through()
+        except Exception:
+            logging.exception("全屏穿透下发失败")
+        logging.info("全屏自动穿透 %s", "开启" if fs_through else "关闭")
     if hit:
         if host.auto_hide_fullscreen and not host._auto_hidden and host.isVisible():
             host._auto_hidden = True
