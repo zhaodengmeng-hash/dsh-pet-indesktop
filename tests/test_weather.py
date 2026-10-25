@@ -313,9 +313,28 @@ def test_wind_speed_maps_to_beaufort_force(kmh, expected):
 # ---------------------------------------------------------------- 3. 响应解析
 def test_parse_search_payload_reads_candidates_and_drops_scenic_spots():
     candidates = W.parse_search_payload(CN_SEARCH_鹿城)
-    assert [c.code for c in candidates] == ["101210710", "101210701009"]
+    # 景点（…A）与子站（12 位码的滨江街道）都被剔除，只留区县级城市
+    assert [c.code for c in candidates] == ["101210710"]
     assert candidates[0].name == "鹿城"
     assert candidates[0].region == "浙江"
+
+
+def test_substation_candidates_are_dropped_because_they_have_no_data():
+    """街道/社区/乡这一级（12 位码）没有实况数据，不能进候选列表。
+
+    实测 2026-10-25：``sk_2d/101260111005``（花果园社区服务中心）只回 128 字节
+    空壳、没有 ``temp``；用户选中它只会得到「返回数据无效」。
+    """
+    payload = (
+        '([{"ref":"101260111~guizhou~南明~nanming~南明~nanming~851~null~NM~贵州"},'
+        '{"ref":"101260111005~guizhou~花果园社区服务中心~huaguoyuan~南明~nanming~0851~null~guizhou~贵州"},'
+        '{"ref":"101260111004~guizhou~后巢乡~houchaoxiang~南明~nanming~0851~null~guizhou~贵州"},'
+        '{"ref":"101210504008~zhejiang~南明街道~nanmingjiedao~新昌~xinchang~0575~312500~zhejiang~浙江"}])'
+    )
+    candidates = W.parse_search_payload(payload)
+    assert [c.code for c in candidates] == ["101260111"], "子站必须被剔除"
+    assert W.is_substation_code("101260111005") is True
+    assert W.is_substation_code("101260111") is False
 
 
 def test_parse_search_payload_tolerates_empty_and_garbage():
@@ -350,7 +369,6 @@ def test_candidates_keep_code_and_region_for_identity():
     candidates = W.parse_search_payload(CN_SEARCH_鹿城)
     assert [(c.code, c.name, c.region) for c in candidates] == [
         ("101210710", "鹿城", "浙江"),
-        ("101210701009", "滨江街道", "浙江"),
     ]
 
 
@@ -505,8 +523,8 @@ def test_budget_spent_mid_flight_blocks_the_fallback_source():
 def test_search_cities_returns_ranked_candidates_and_reason():
     ok = _FakeHttp([("toy1.weather.com.cn", CN_SEARCH_鹿城)])
     results, error = _client(ok).search_cities("鹿城")
-    # 精确命中排第一，其余候选保留供用户改选
-    assert [c.code for c in results] == ["101210710", "101210701009"] and error == ""
+    # 精确命中排第一；子站（滨江街道 12 位码）无实况数据，已不进候选
+    assert [c.code for c in results] == ["101210710"] and error == ""
 
     bad = _FakeHttp([("toy1.weather.com.cn", TimeoutError("timed out"))])
     results, error = _client(bad).search_cities("鹿城")

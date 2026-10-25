@@ -497,11 +497,28 @@ def describe_error(exc: BaseException) -> str:
 
 
 # ---------------------------------------------------------------- 响应解析
+def is_substation_code(code) -> bool:
+    """是否「子站」地区码（街道 / 社区 / 乡 / 镇级），这类**没有实况数据**。
+
+    源 A 的区县级城市码是 **9 位**（``101260111`` 南明、``101280501`` 汕头），
+    街道/社区/乡这一级是 **12 位**（``101260111005`` 花果园社区服务中心）。
+    实测（2026-10-25）12 位码的 ``sk_2d`` 只回 128 字节空壳、没有 ``temp``，
+    取数必然「返回数据无效」——所以这类候选既不该出现在「添加城市」列表里，
+    也不该被按名字检索选中。
+    """
+    text = str(code or "").strip()
+    return len(text) > 9
+
+
 def parse_search_payload(text: str) -> list[CityCandidate]:
     """解析源 A 城市检索的响应 ``([{"ref":"code~...~名称~..."}])``。
 
     字段位（2026-10-07 实测）：``code~省~名称~拼音~城市~城市拼音~区号~邮编~缩写~省份``。
-    末尾带 ``A`` 的地区码是景点（如 ``10102020001A``），会盖掉同名的真城市，剔除。
+
+    两类候选会被剔除：
+    - 末尾带 ``A`` 的地区码是景点（如 ``10102020001A``），会盖掉同名的真城市；
+    - **子站**（12 位码：街道 / 社区服务中心 / 乡）——它们没有实况数据，
+      选中就只会得到「返回数据无效」（见 :func:`is_substation_code`）。
     """
     raw = str(text or "").strip()
     start, end = raw.find("["), raw.rfind("]")
@@ -519,7 +536,7 @@ def parse_search_payload(text: str) -> list[CityCandidate]:
             continue
         code = parts[0].strip()
         name = parts[2].strip()
-        if not code or not name or code.endswith("A"):
+        if not code or not name or code.endswith("A") or is_substation_code(code):
             continue
         region = parts[-1].strip()
         candidates.append(CityCandidate(code=code, name=name, region=region))
