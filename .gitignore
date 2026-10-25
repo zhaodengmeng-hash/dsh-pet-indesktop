@@ -84,3 +84,6 @@ android/**/build/
 *.keystore
 *.jks
 dist-android/
+
+# 运行期生成的缩略图缓存（pet 里浏览形象库时产生，不入库）
+dsh-pet-thumbs/
