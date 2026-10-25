@@ -76,6 +76,9 @@ SELF_TALK_BUBBLE_STYLES = {
     "paper_left",
     "glass_right",
     "soft_blue_top",
+    "anime_moe",
+    "anime_sakura",
+    "anime_starry",
     "breath_bubble",
 }
 DEFAULT_CONTEXT_MENU_APPEARANCE = {

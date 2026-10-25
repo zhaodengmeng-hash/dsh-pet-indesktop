@@ -28,7 +28,7 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
+    QColor, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen,
     QPixmap, QTransform,
 )
 from PySide6.QtWidgets import (
@@ -281,6 +281,20 @@ class FlowLayout(QLayout):
 
 # Each preset deliberately combines a distinct surface treatment with a preferred
 # anchor.  They are not colour-only aliases of the legacy bubble.
+def _four_point_star(center: QPointF, radius: float) -> QPainterPath:
+    """四角星（二次元贴纸光效）：尖角在上下左右，腰身收窄。"""
+    star = QPainterPath()
+    r = max(0.5, float(radius))
+    waist = r * 0.22
+    star.moveTo(center.x(), center.y() - r)
+    star.quadTo(center.x() + waist, center.y() - waist, center.x() + r, center.y())
+    star.quadTo(center.x() + waist, center.y() + waist, center.x(), center.y() + r)
+    star.quadTo(center.x() - waist, center.y() + waist, center.x() - r, center.y())
+    star.quadTo(center.x() - waist, center.y() - waist, center.x(), center.y() - r)
+    star.closeSubpath()
+    return star
+
+
 BUBBLE_STYLE_PRESETS = {
     "classic_top": {
         "label": "经典暖黄 · 正上方", "placement": "top",
@@ -301,6 +315,38 @@ BUBBLE_STYLE_PRESETS = {
         "label": "柔蓝对话 · 正上方", "placement": "top",
         "background": "#eef6ff", "border": "#a9c9ef", "foreground": "#24466f",
         "radius": 16, "shadow": "#315f91",
+    },
+    # 二次元三档（2026-10-25）：白→浅色的竖向渐变、2px 彩色描边 + 外侧柔光、
+    # 更大圆角、左上高光与右上三颗小星星。新增键全部可选，缺省时绘制路径与
+    # 加这套特性之前逐位相同（见 paintEvent / _paint_anime_accents）。
+    # 注意 background 必须各不相同：test_desktop_pet_features 会校验每个预设
+    # 的表面色互不重复。
+    "anime_moe": {
+        "label": "二次元奶白 · 正上方", "placement": "top",
+        "background": "#f7fbff",
+        "gradient": ("#ffffff", "#e2f0ff"),
+        "border": "#5aa9ea", "border_width": 2.0,
+        "foreground": "#2b3a55",
+        "radius": 22, "shadow": "#3f6f9e",
+        "sparkle": True, "glow": True, "shine": True,
+    },
+    "anime_sakura": {
+        "label": "二次元樱花 · 正上方", "placement": "top",
+        "background": "#fffafc",
+        "gradient": ("#ffffff", "#ffe6f0"),
+        "border": "#f08db4", "border_width": 2.0,
+        "foreground": "#4a2b38",
+        "radius": 22, "shadow": "#b2577e",
+        "sparkle": True, "glow": True, "shine": True,
+    },
+    "anime_starry": {
+        "label": "二次元星空 · 正上方", "placement": "top",
+        "background": "#fbf9ff",
+        "gradient": ("#ffffff", "#ece4ff"),
+        "border": "#9b8bf0", "border_width": 2.0,
+        "foreground": "#382d55",
+        "radius": 22, "shadow": "#5b4f96",
+        "sparkle": True, "glow": True, "shine": True,
     },
     "breath_bubble": {
         "label": "吐气水泡 · 左上方", "placement": "top_left",
@@ -1698,7 +1744,7 @@ class PetSpeechBubble(QFrame):
             self._paint_breath_bubble(painter, background, border)
             return
         self._paint_soft_shadow(painter, self._surface_path)
-        painter.setBrush(background)
+        painter.setBrush(self._surface_brush())
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(self._surface_path)
         self._standard_image_rect = QRectF()
@@ -1716,9 +1762,73 @@ class PetSpeechBubble(QFrame):
             )
             painter.restore()
             self._standard_image_rect = image_rect
+        # 二次元风可选：先描一圈更宽的半透明边（外侧柔光），再描主描边
+        border_width = float(self._preset.get("border_width", 1.0))
+        if self._preset.get("glow"):
+            glow = QColor(border)
+            glow.setAlpha(70)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(glow, border_width + 3.0, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(self._surface_path)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(border, 1.0))
+        painter.setPen(QPen(border, border_width, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.drawPath(self._surface_path)
+        self._paint_anime_accents(painter, border)
+
+    def _surface_brush(self):
+        """气泡填充：预设给了 ``gradient`` 就用竖向渐变，否则是纯色。
+
+        缺省（旧预设）走纯色分支 ⇒ 绘制结果与加这个特性之前逐位相同。
+        """
+        gradient = self._preset.get("gradient")
+        if not gradient or len(gradient) < 2:
+            return QColor(self._preset["background"])
+        rect = QRectF(self._surface_rect)
+        ramp = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        ramp.setColorAt(0.0, QColor(gradient[0]))
+        ramp.setColorAt(1.0, QColor(gradient[1]))
+        return ramp
+
+    def _paint_anime_accents(self, painter: QPainter, border: QColor) -> None:
+        """二次元点缀：左上角一道奶白高光 + 右上角三颗小星星。
+
+        全部 ``setClipPath(self._surface_path)`` 之后再画：贴边的小装饰看起来像
+        贴纸光效，越界会被气泡轮廓裁掉，不会在空白处留下"漂浮的星星"。
+        ``shine`` / ``sparkle`` 都是预设里的可选键，旧预设两个都没有 ⇒ 直接返回。
+        """
+        shine = bool(self._preset.get("shine"))
+        sparkle = bool(self._preset.get("sparkle"))
+        if not (shine or sparkle):
+            return
+        rect = QRectF(self._surface_rect)
+        radius = float(self._preset["radius"])
+        stars = (
+            (rect.right() - radius * 0.42, rect.top() + radius * 0.55, 7.0, 220),
+            (rect.right() - radius * 0.42 - 11.0, rect.top() + radius * 0.55 + 12.0, 4.6, 180),
+            (rect.right() - radius * 0.42 + 8.0, rect.top() + radius * 0.55 + 14.0, 3.4, 150),
+        )
+        painter.save()
+        painter.setClipPath(self._surface_path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        if shine:
+            gloss = QPainterPath()
+            height = max(7.0, rect.height() * 0.26)
+            width = max(28.0, rect.width() * 0.34)
+            gloss.addRoundedRect(
+                QRectF(rect.left() + 9.0, rect.top() + 6.0, width, height),
+                height / 2.0, height / 2.0,
+            )
+            painter.setBrush(QColor(255, 255, 255, 210))
+            painter.drawPath(gloss)
+        if sparkle:
+            for x, y, size, alpha in stars:
+                color = QColor(border)
+                color.setAlpha(alpha)
+                painter.setBrush(color)
+                painter.drawPath(_four_point_star(QPointF(x, y), size))
+        painter.restore()
 
     def _paint_soft_shadow(self, painter: QPainter, path: QPainterPath) -> None:
         base = QColor(self._preset["shadow"])
