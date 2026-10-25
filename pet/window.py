@@ -1385,13 +1385,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     @staticmethod
     def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                                 geom, has_caption: bool, topmost: bool = False) -> bool:
-        """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
+                                 geom, has_caption: bool, topmost: bool = False,
+                                 zoomed: bool = False) -> bool:
+        """覆盖整屏几何，且（无标题栏 或 置顶 或 未最大化）= 真全屏。
 
         实现已搬至 pet/platform_win.py（批 6-3），此处为兼容性薄委托。
         """
         return platform_win._fullscreen_geometry_hit(
-            l, t, r, b, geom, has_caption, topmost)
+            l, t, r, b, geom, has_caption, topmost, zoomed)
 
     # ------------------------------------------------------------------
     # 全屏 watcher：后台线程轮询（纯 win32，线程安全）+ 信号回主线程

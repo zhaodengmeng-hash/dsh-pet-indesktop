@@ -312,19 +312,25 @@ _FS_SKIP_PROCS = {'pixpin.exe', 'snipaste.exe'}
 
 
 def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                             geom, has_caption: bool, topmost: bool = False) -> bool:
-    """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
+                             geom, has_caption: bool, topmost: bool = False,
+                             zoomed: bool = False) -> bool:
+    """覆盖整屏几何，且（无标题栏 或 置顶 或 **未最大化**）= 真全屏。
 
-    判据组合的原因：
-    - 带标题栏的普通/最大化窗口（含 Windows 自动隐藏任务栏场景）不置顶 → 排除；
+    判据组合的原因（2026-10-25 增补第三档）：
     - 真全屏游戏/视频：多数去掉标题栏（无标题栏直接命中）；Unity/UE 系游戏
-      （如绝区零）全屏时保留 WS_CAPTION 样式位但几乎必带 WS_EX_TOPMOST，用
-      置顶位兜住；
-    - 已最大化后按 F11 的窗口（IsZoomed 仍为真、标题栏被清掉）也正常命中。
+      （如绝区零）全屏时保留 WS_CAPTION 样式位但几乎必带 WS_EX_TOPMOST；
+    - **带标题栏、不置顶、但覆盖整屏且 IsZoomed 为假**：这是《三角洲行动》
+      （``UnrealWindow``）这类 UE 游戏的「无边框全屏」——实测窗口
+      rect=(-1,-31)-(2561,1441)、caption=True、topmost=False、IsZoomed=False，
+      旧判据把这一类整个漏掉 ⇒ 全屏穿透与自动隐藏都不触发；
+    - Windows「自动隐藏任务栏」下的**普通最大化窗口**（IsZoomed=True）虽然也
+      铺满整屏，但带标题栏 → 仍然排除：用 IsZoomed 区分"真全屏"与"最大化"，
+      而不是只看标题栏；
+    - 已最大化后按 F11（IsZoomed 仍为真、标题栏被清掉）照旧由"无标题栏"兜住。
 
     geom 兼容 QRect（方法访问）与 win32 RECT（属性访问）。
     """
-    if has_caption and not topmost:
+    if has_caption and not topmost and zoomed:
         return False
     gl = geom.left() if callable(getattr(geom, "left", None)) else geom.left
     gt = geom.top() if callable(getattr(geom, "top", None)) else geom.top
@@ -414,15 +420,18 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     mi.cbSize = ctypes.sizeof(_WinMonitorInfo)
     if not u32.GetMonitorInfoW(mon, ctypes.byref(mi)):
         return False, f"GetMonitorInfoW 失败 cls={cls}"
+    # IsZoomed：区分「最大化窗口」（含自动隐藏任务栏铺满整屏的普通窗口）与
+    # 「无边框全屏游戏」——后者带 WS_CAPTION 但不最大化（见 _fullscreen_geometry_hit）
+    zoomed = bool(u32.IsZoomed(hwnd))
     if _fullscreen_geometry_hit(
-            x, y, x + w, y + h, mi.rcMonitor, has_caption, topmost):
+            x, y, x + w, y + h, mi.rcMonitor, has_caption, topmost, zoomed=zoomed):
         return True, f"几何覆盖 cls={cls} proc={info.get('process', '')}"
     busy, bstate = _fs_user_busy_state()
     if busy:
         return True, (f"SHQueryUserNotificationState={bstate} "
                       f"cls={cls} proc={info.get('process', '')}")
     detail = (f"未命中 cls={cls} proc={info.get('process', '')} "
-              f"caption={has_caption} topmost={topmost} "
+              f"caption={has_caption} topmost={topmost} zoomed={zoomed} "
               f"rect=({x},{y},{x + w},{y + h}) "
               f"monitor=({mi.rcMonitor.left},{mi.rcMonitor.top},"
               f"{mi.rcMonitor.right},{mi.rcMonitor.bottom}) busy={bstate}")

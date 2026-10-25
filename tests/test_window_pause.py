@@ -241,12 +241,15 @@ def test_native_set_visible_cycle_recovers_warm(app, tmp_path):
 
 
 def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):
-    """全屏判定：覆盖整屏几何且无标题栏（WS_CAPTION）= 真全屏。
+    """全屏判定：覆盖整屏几何 +（无标题栏 / 置顶 / 非最大化）。
 
-    回归一：Windows「自动隐藏任务栏」下最大化窗口铺满整屏，旧实现只看几何把它
-    误判成真全屏而隐藏桌宠 → 带标题栏的窗口不命中。
+    回归一：Windows「自动隐藏任务栏」下**最大化**窗口铺满整屏，旧实现只看几何把它
+    误判成真全屏而隐藏桌宠 → 带标题栏 **且 IsZoomed** 的窗口不命中。
     回归二：已最大化后按 F11（IsZoomed 仍为真、但应用清掉标题栏）应命中——
     几何 + IsZoomed 都无法区分该场景与普通最大化窗口，标题栏才是可靠信号。
+    回归三（2026-10-25）：《三角洲行动》这类 UE 无边框全屏带 WS_CAPTION、
+    **不置顶、也不最大化**，但覆盖整屏 → 必须命中（旧判据整类漏掉，全屏穿透
+    与自动隐藏都不触发）。
     """
     lib = FakeLibrary()
     win = PetWindow(lib, Config(base=tmp_path))
@@ -256,17 +259,23 @@ def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):
     # 无标题栏 + 覆盖整屏 → 命中，应隐藏桌宠
     assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, has_caption=False) is True
 
-    # 自动隐藏任务栏 + 普通最大化窗口：铺满整屏但带标题栏 → 不命中（修复目标）
-    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, has_caption=True) is False
+    # 自动隐藏任务栏 + 普通最大化窗口：铺满整屏、带标题栏且 IsZoomed → 不命中
+    assert win._fullscreen_geometry_hit(
+        0, 0, 1920, 1080, geom, has_caption=True, zoomed=True) is False
 
     # 任务栏常驻 + 普通最大化窗口：带标题栏且只到工作区 → 不命中
-    assert win._fullscreen_geometry_hit(0, 0, 1920, 1040, geom, has_caption=True) is False
+    assert win._fullscreen_geometry_hit(
+        0, 0, 1920, 1040, geom, has_caption=True, zoomed=True) is False
 
     # 无标题栏但未覆盖整屏（普通无边框窗口）→ 不命中，几何仍是必要条件
     assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, has_caption=False) is False
 
     # 带标题栏的普通窗口 → 不命中
     assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, has_caption=True) is False
+
+    # UE 无边框全屏（三角洲行动实测）：带标题栏、不置顶、**未最大化**、覆盖整屏 → 命中
+    assert win._fullscreen_geometry_hit(
+        -1, -31, 1921, 1081, geom, has_caption=True, topmost=False, zoomed=False) is True
 
     # Unity/UE 系游戏（如绝区零）全屏时保留 WS_CAPTION 但必带 WS_EX_TOPMOST：
     # 置顶 + 覆盖整屏 → 命中（PR #18 的纯标题栏判据对这类游戏漏检）
