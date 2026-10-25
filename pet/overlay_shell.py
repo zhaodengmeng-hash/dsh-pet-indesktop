@@ -1980,6 +1980,16 @@ class OverlayShell(QObject):
                 "self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE)
                 or DEFAULT_SELF_TALK_BUBBLE_STYLE))
         self._apply_bubble_text_scale(getattr(follower, "bubble", None), cfg)
+        # 灵动岛式抬头（参考图）：说话者名字 = 当前角色的显示名（含用户改名）
+        try:
+            bubble = getattr(follower, "bubble", None)
+            setter = getattr(bubble, "set_identity", None)
+            if callable(setter):
+                name = self._config.character_display_name(
+                    str(cfg.get("character", "") or ""))
+                setter(str(name or ""))
+        except Exception:
+            logging.debug("overlay: 气泡抬头名字接线失败", exc_info=True)
         return follower
 
     def _ensure_sprite_bubble(self, sprite) -> None:

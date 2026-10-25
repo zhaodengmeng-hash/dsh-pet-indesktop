@@ -79,6 +79,7 @@ SELF_TALK_BUBBLE_STYLES = {
     "anime_moe",
     "anime_sakura",
     "anime_starry",
+    "island_dark",
     "breath_bubble",
 }
 DEFAULT_CONTEXT_MENU_APPEARANCE = {

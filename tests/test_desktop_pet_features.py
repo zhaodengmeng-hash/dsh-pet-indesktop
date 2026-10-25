@@ -46,9 +46,11 @@ def test_self_talk_bubble_presets_have_distinct_visuals_and_safe_positions():
         # 2026-10-25：二次元三档（奶白 / 樱花 / 星空），共用同一套
         # 渐变 + 粗描边 + 星星点缀绘制（见 paintEvent / _paint_anime_accents）
         "anime_moe", "anime_sakura", "anime_starry",
+        # 2026-10-25：灵动岛深色卡片（参考图风格：抬头 + 分隔线 + 无尾巴）
+        "island_dark",
         "breath_bubble",
     ]
-    assert len({preset["background"] for preset in BUBBLE_STYLE_PRESETS.values()}) == 8
+    assert len({preset["background"] for preset in BUBBLE_STYLE_PRESETS.values()}) == 9
     assert {preset["placement"] for preset in BUBBLE_STYLE_PRESETS.values()} == {
         "top", "top_left", "top_right",
     }
@@ -1453,6 +1455,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         "二次元奶白 · 正上方",
         "二次元樱花 · 正上方",
         "二次元星空 · 正上方",
+        "灵动岛深色 · 正上方",
         "吐气水泡 · 左上方",
     ]
     assert "SettingsPopup" in dialog.scale_combo.popupStyleSheet()

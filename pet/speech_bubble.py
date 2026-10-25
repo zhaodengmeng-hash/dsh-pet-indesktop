@@ -24,12 +24,12 @@ from math import ceil, floor
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
+    QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTime, QTimer,
     Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen,
-    QPixmap, QTransform,
+    QColor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPainterPath,
+    QPen, QPixmap, QTransform,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -348,6 +348,19 @@ BUBBLE_STYLE_PRESETS = {
         "radius": 22, "shadow": "#5b4f96",
         "sparkle": True, "glow": True, "shine": True,
     },
+    # 灵动岛深色卡片（2026-10-25，按用户给的参考图）：深色渐变底、1px 细描边、
+    # 无尾巴、顶部一条「● 名字    17:17」抬头 + 分隔线，正文加粗、副标题走弱化色。
+    # ``tail: False`` 表示不画指向桌宠的三角尾巴（参考图是独立卡片）。
+    "island_dark": {
+        "label": "灵动岛深色 · 正上方", "placement": "top",
+        "background": "#1b2027",
+        "gradient": ("#242b34", "#151a20"),
+        "border": "#3a434e", "border_width": 1.0,
+        "foreground": "#eef2f7",
+        "muted": "#93a1b1",
+        "radius": 14, "shadow": "#000000",
+        "tail": False, "header": True, "bold": True,
+    },
     "breath_bubble": {
         "label": "吐气水泡 · 左上方", "placement": "top_left",
         "background": "#fbfeff", "border": "#0e5968", "foreground": "#23444d",
@@ -444,6 +457,9 @@ class PetSpeechBubble(QFrame):
         # 位置滑动动画（懒创建）：气泡每次改位置都滑过去而非瞬移。
         self._pos_anim: QPropertyAnimation | None = None
         self._style_id = ""
+        # header 预设的抬头信息（说话者名字 + 冒泡时刻），由 set_identity / show_text 维护
+        self._identity_name = ""
+        self._header_time = ""
         self._preset = BUBBLE_STYLE_PRESETS["classic_top"]
         self._anchor_rect = QRect()
         self._surface_rect = QRect()
@@ -531,6 +547,10 @@ class PetSpeechBubble(QFrame):
         # 样式表没变时 setStyleSheet 会短路，这里显式重挂保证换系数立即生效。
         self.set_style(self._style_id)
 
+    def set_identity(self, name: str) -> None:
+        """抬头显示的说话者名字（``header`` 预设才用得到；旧预设不受影响）。"""
+        self._identity_name = str(name or "").strip()
+
     def set_style(self, style_id: str) -> None:
         self._style_id = style_id if style_id in BUBBLE_STYLE_PRESETS else "classic_top"
         self._preset = BUBBLE_STYLE_PRESETS[self._style_id]
@@ -542,7 +562,13 @@ class PetSpeechBubble(QFrame):
             self._water_fill = "#d9f2fb"
             self._shadow_alpha = 0
         else:
-            self._layout.setContentsMargins(13, 10, 13, 17)
+            # header 预设要在顶部留出一条抬头带（paintEvent 里画 ● 名字 + 时间 +
+            # 分隔线）；无尾巴的卡片底部也不必留尾巴高度的内边距。
+            header = bool(self._preset.get("header"))
+            tail = bool(self._preset.get("tail", True))
+            top = 34 if header else 10
+            bottom = 13 if (header or not tail) else 17
+            self._layout.setContentsMargins(13, top, 13, bottom)
             self._layout.setAlignment(
                 self.label, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
@@ -552,14 +578,16 @@ class PetSpeechBubble(QFrame):
             self.setMaximumSize(16777215, 16777215)
             self._water_fill = ""
             self._shadow_alpha = 18
+        bold_css = "font-weight: 600; " if self._preset.get("bold") else ""
+        muted_color = self._preset.get("muted") or self._preset["foreground"]
         self.label.setStyleSheet(
             "QLabel#pet-speech-label { background: transparent; border: none; padding: 0; "
-            f"color: {self._preset['foreground']}; "
+            f"color: {self._preset['foreground']}; {bold_css}"
             f"font-size: {scale_bubble_font_px(BUBBLE_BODY_FONT_PX, self._text_scale)}px; }}"
         )
         self._subtitle_label.setStyleSheet(
             "QLabel#pet-speech-subtitle { background: transparent; border: none; padding: 0; "
-            f"color: {self._preset['foreground']}; "
+            f"color: {muted_color}; "
             f"font-size: {scale_bubble_font_px(BUBBLE_TITLE_FONT_PX if self._title_first else BUBBLE_SUBTITLE_FONT_PX, self._text_scale)}px; }}"
         )
         self._subtitle_label.setMaximumWidth(self._subtitle_width_floor())
@@ -944,6 +972,7 @@ class PetSpeechBubble(QFrame):
         text = str(text).strip()
         if not text:
             return
+        self._header_time = QTime.currentTime().toString("HH:mm")
         interactive = bool(buttons)
         # 交互提醒（如循环检测的三按钮弹窗）必须保持按钮和回调绑定。
         # 动画/普通气泡偶尔会在之后尝试重绘同一窗口；若允许无按钮的
@@ -1626,6 +1655,12 @@ class PetSpeechBubble(QFrame):
         rounded.addRoundedRect(QRectF(self._surface_rect), radius, radius)
         self._main_bubble_path = QPainterPath(rounded)
         self._breath_paths = []
+        if not self._preset.get("tail", True):
+            # 独立卡片（灵动岛深色）：不画指向桌宠的三角尾巴
+            self._surface_path = QPainterPath(rounded)
+            self._surface_geometry_key = key
+            self.update()
+            return
         tail = QPainterPath()
         tail.moveTo(self._tail_base[0])
         tail.lineTo(self._tail_tip)
@@ -1775,7 +1810,96 @@ class PetSpeechBubble(QFrame):
         painter.setPen(QPen(border, border_width, Qt.PenStyle.SolidLine,
                             Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.drawPath(self._surface_path)
+        self._paint_header(painter)
         self._paint_anime_accents(painter, border)
+
+    def _header_avatar_pixmap(self, size: int):
+        """抬头头像：应用图标裁圆用（取不到就返回 None，退化成彩色圆点）。
+
+        进程内只取一次：图标本身是资源文件，反复 QIcon.pixmap 会做重复解码。
+        """
+        cached = getattr(self, "_avatar_cache", None)
+        if cached is not None:
+            return cached or None
+        pixmap = None
+        try:
+            from .application_icon import load_application_icon
+
+            icon = load_application_icon()
+            candidate = icon.pixmap(size, size)
+            if candidate is not None and not candidate.isNull():
+                pixmap = candidate
+        except Exception:
+            pixmap = None
+        self._avatar_cache = pixmap
+        return pixmap
+
+    def _paint_header(self, painter: QPainter) -> None:
+        """灵动岛式抬头：● 名字 〔右对齐〕17:17，下面一条 1px 分隔线。
+
+        用 QPainter 直接画而不是加 QLabel：气泡的高度/宽度预算被一堆几何测试
+        钉着（副标题行数、分页、按钮行），加控件会牵动布局口径；抬头只是一条
+        装饰带，画在 ``header`` 预留的 24px 内边距里最省事。
+        """
+        if not self._preset.get("header"):
+            return
+        rect = QRectF(self._surface_rect)
+        pad = 12.0
+        accent = QColor(self._preset["border"])
+        foreground = QColor(self._preset["foreground"])
+        muted = QColor(self._preset.get("muted") or self._preset["foreground"])
+        muted.setAlpha(210)
+        baseline = rect.top() + 18.0
+        avatar = self._header_avatar_pixmap(22)
+        name_x = rect.left() + pad
+        if avatar is not None:
+            # 参考图左侧是圆形头像：用应用图标裁成圆（拿不到图标时退回彩色圆点）
+            target = QRectF(name_x, baseline - 11.0, 22.0, 22.0)
+            clip = QPainterPath()
+            clip.addEllipse(target)
+            painter.save()
+            painter.setClipPath(clip)
+            painter.drawPixmap(target, avatar, QRectF(avatar.rect()))
+            painter.restore()
+            ring = QColor(accent)
+            ring.setAlpha(150)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(ring, 1.0))
+            painter.drawEllipse(target)
+            name_x = target.right() + 8.0
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(accent)
+            painter.drawEllipse(QPointF(name_x + 4.0, baseline - 4.0), 4.0, 4.0)
+            name_x += 14.0
+        font = QFont(self.font())
+        point = font.pointSizeF() if font.pointSizeF() > 0 else 9.0
+        font.setPointSizeF(max(6.5, point * 0.86))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(foreground)
+        name = self._identity_name or "桌宠"
+        name_rect = QRectF(name_x, baseline - 10.0,
+                           max(40.0, rect.right() - pad - 70.0 - name_x), 20.0)
+        metrics = QFontMetrics(font)
+        painter.drawText(
+            name_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            metrics.elidedText(name, Qt.TextElideMode.ElideRight, int(name_rect.width())),
+        )
+        if self._header_time:
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(muted)
+            painter.drawText(
+                QRectF(rect.right() - pad - 60.0, baseline - 10.0, 60.0, 20.0),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                self._header_time,
+            )
+        divider = QColor(self._preset["border"])
+        divider.setAlpha(120)
+        painter.setPen(QPen(divider, 1.0))
+        painter.drawLine(QPointF(rect.left() + pad, rect.top() + 30.0),
+                         QPointF(rect.right() - pad, rect.top() + 30.0))
 
     def _surface_brush(self):
         """气泡填充：预设给了 ``gradient`` 就用竖向渐变，否则是纯色。
