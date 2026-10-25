@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import unicodedata
 import urllib.error
@@ -100,6 +101,22 @@ _CITY_SUFFIXES = (
     "维吾尔自治区", "壮族自治区", "回族自治区", "内蒙古自治区", "特别行政区",
     "自治区", "自治州", "自治县", "开发区", "高新区", "新区", "地区", "街道",
     "省", "市", "区", "县", "镇", "乡", "旗", "盟",
+)
+
+#: 一次城市检索最多试几个名字变体（每个变体一次请求）。地址式输入
+#: （「武汉江夏区」「湖北省武汉市江夏区」）要逐级剥前缀才落到「江夏」，
+#: 上限太小会够不着、太大则点一下要等好几秒。
+MAX_SEARCH_ATTEMPTS = 6
+
+#: 行政末梢（街道 / 办事处 / 管委会）——源 A 检索会把它们和区县混在一起返回，
+#: 而它们**不是用户要的城市**：查「江夏区」时首批候选全是「江夏区经济开发区
+#: 藏龙岛办事处」这种，宽松匹配会把街道当成区选中（2026-10-25 实测）。
+_SUBCITY_TOKENS = ("街道", "办事处", "管理委员会")
+
+#: 省级行政区（用于从「湖北省武汉市江夏区」这类连写里剥前缀）。
+#: 与 ``network_info.CN_MAINLAND_REGIONS`` 同源，避免两份真相。
+_ADMIN_PREFIX_RE = (
+    "省", "市", "自治区", "特别行政区", "地区", "盟",
 )
 
 # 歧义标签的分隔符（同一个搜索结果里出现同名城市时才用，如「朝阳 · 辽宁」）。
@@ -203,6 +220,91 @@ def city_name_variants(raw) -> tuple[str, ...]:
         return ()
     stripped = strip_city_suffix(name)
     return (name,) if stripped == name else (name, stripped)
+
+
+def is_subcity_name(raw) -> bool:
+    """是否是行政末梢（街道 / 办事处 / 管委会）——检索里的干扰项，不是城市。"""
+    name = normalize_city_name(raw)
+    return any(token in name for token in _SUBCITY_TOKENS)
+
+
+def has_admin_suffix(raw) -> bool:
+    """查询名是否带行政区后缀（区/县/市/镇…）：决定要不要排除街道候选。"""
+    name = normalize_city_name(raw)
+    return bool(name) and strip_city_suffix(name) != name
+
+
+def strip_admin_prefix(raw) -> str:
+    """剥掉连写地址的前缀（「湖北省武汉市江夏区」→「江夏区」）；剥不动就原样返回。
+
+    源 A 的城市检索**只认城市/区名本身**：2026-10-25 实测「武汉江夏区」「武汉市
+    江夏区」「湖北省武汉市江夏区」全部返回空数组，而「江夏」直接命中
+    （``101200105``）。所以地址式输入必须先把省/市前缀剥掉再查。
+    """
+    from . import network_info
+
+    regions = network_info.CN_MAINLAND_REGIONS | network_info.NON_MAINLAND_REGIONS
+    name = normalize_city_name(raw)
+    for _ in range(3):
+        rest = ""
+        for region in regions:
+            if name.startswith(region) and len(name) - len(region) >= 2:
+                rest = name[len(region):]
+                break
+        if rest:
+            for token in _ADMIN_PREFIX_RE:
+                if rest.startswith(token) and len(rest) - len(token) >= 2:
+                    rest = rest[len(token):]
+                    break
+            if len(rest) >= 2:
+                name = rest
+                continue
+        # 任意「XX市 / XX地区 / XX盟」前缀（省份表没覆盖到的地级市）
+        match = re.match(r"^(.{2,4}?)(?:市|地区|盟)(.{2,})$", name)
+        if match:
+            name = match.group(2)
+            continue
+        break
+    return normalize_city_name(name)
+
+
+def search_name_variants(raw) -> tuple[str, ...]:
+    """城市检索要试的名字链（订单从具体到宽泛，最多 ``MAX_SEARCH_ATTEMPTS`` 条）。
+
+    三种写法都要能落到同一个城市：
+
+    - 原名（「江夏」）；
+    - 带后缀（「江夏区」）——检索侧再试剥后缀；
+    - **地址式连写**（「武汉江夏区」/「湖北省武汉市江夏区」）——源 A 对这种输入
+      返回空数组，必须先剥省/市前缀（:func:`strip_admin_prefix`），再从左逐字
+      剥离兜底（「武汉江夏区」→「江夏区」→「江夏」）。
+
+    变体只用于**查询**，绝不回写存储（存储层口径见 :func:`normalize_city_name`）。
+    """
+    name = normalize_city_name(raw)
+    if not name:
+        return ()
+    out: list[str] = []
+
+    def add(value: str) -> None:
+        value = normalize_city_name(value)
+        if len(value) >= 2 and value not in out:
+            out.append(value)
+
+    add(name)
+    add(strip_city_suffix(name))
+    trimmed = strip_admin_prefix(name)
+    add(trimmed)
+    add(strip_city_suffix(trimmed))
+    for cut in range(1, len(trimmed)):
+        tail = trimmed[cut:]
+        if len(tail) < 2:
+            break
+        add(tail)
+        add(strip_city_suffix(tail))
+        if len(out) >= MAX_SEARCH_ATTEMPTS:
+            break
+    return tuple(out[:MAX_SEARCH_ATTEMPTS])
 
 
 def base_city_name(label) -> str:
@@ -631,10 +733,16 @@ class WeatherClient:
         """城市检索（源 A 独有）：返回 ``(候选列表, 失败原因)``；失败不抛。
 
         添加城市的对话框要的是"搜不到就说搜不到"，而不是异常。名字按
-        :func:`city_name_variants` 逐个试：**原名**宽松匹配，**剥后缀变体**要求
-        精确命中（否则「新乡」搜不到时会用「新」把「新余」顶上来）。
+        :func:`search_name_variants` 逐个试（原名 → 剥后缀 → 剥省/市前缀 →
+        逐字左剥，覆盖「江夏」「江夏区」「武汉江夏区」「湖北省武汉市江夏区」四种
+        写法）：**第一个变体**宽松匹配，其余变体要求**精确命中**（否则「新乡」
+        搜不到时会用「新」把「新余」顶上来）。
+
+        带行政区后缀的查询（「江夏区」）还要**剔掉街道/办事处候选**：源 A 对这类
+        查询返回的头几条全是「江夏区经济开发区藏龙岛办事处」，宽松匹配会把街道
+        当成区选中（2026-10-25 实测）。
         """
-        for index, name in enumerate(city_name_variants(base_city_name(query))):
+        for index, name in enumerate(search_name_variants(base_city_name(query))):
             url = CN_SEARCH_URL.format(query=urllib.parse.quote(name))
             try:
                 payload = self._get(url, use_proxy=False, deadline=deadline,
@@ -644,6 +752,17 @@ class WeatherClient:
                 log.warning("天气城市检索失败 %s：%s", url, reason)
                 return [], reason
             candidates = parse_search_payload(payload)
+            if has_admin_suffix(name):
+                # 带后缀的查询（「江夏区」）只认**同名的区县**：源 A 对这类查询返回的
+                # 头几条是「江夏区经济开发区梁子湖风景区办事处」这种子单元（有的名字里
+                # 连「办事处」三个字都没有，靠 _SUBCITY_TOKENS 认不全），宽松匹配就会
+                # 把子单元当成区选中。这里按"剥后缀后同名"收紧，宁可落到下一个变体。
+                target = strip_city_suffix(name)
+                candidates = [
+                    c for c in candidates
+                    if strip_city_suffix(c.name) == target
+                    and not is_subcity_name(c.name)
+                ]
             picked = pick_candidate(candidates, name, exact_only=index > 0)
             if picked is not None:
                 return [picked] + [c for c in candidates if c is not picked], ""

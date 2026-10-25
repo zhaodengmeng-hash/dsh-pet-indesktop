@@ -199,6 +199,67 @@ def test_base_city_name_strips_the_disambiguation_suffix():
     assert W.base_city_name("") == ""
 
 
+# ------------------------------------------------- 地址式输入的检索回退（2026-10-25）
+# 用户实测：在「添加城市…」里输入自家地址（武汉江夏区）**搜不到城市**——源 A 的
+# 城市检索只认城市/区名本身，连写地址一律返回空数组。下面钉住三条：
+# ① 剥省/市前缀；② 逐字左剥兜底；③ 带后缀的查询不得把街道/办事处当成区。
+CN_SEARCH_江夏 = (
+    '([{"ref":"101200105~hubei~江夏~Jiangxia~江夏~Jiangxia~27~430200~JJ~湖北"},'
+    '{"ref":"101200105001~hubei~安山街道~anshanjiedao~江夏~jiangxia~027~430200~JJ~湖北"}])'
+)
+CN_SEARCH_江夏区_子单元 = (
+    '([{"ref":"101200105009~hubei~江夏区经济开发区梁子湖风景区办事处~'
+    'jiangxiaqujingjikaifaqu~江夏~jiangxia~027~430200~JJ~湖北"}])'
+)
+
+
+def test_strip_admin_prefix_handles_address_style_names():
+    assert W.strip_admin_prefix("湖北省武汉市江夏区") == "江夏区"
+    assert W.strip_admin_prefix("武汉市江夏区") == "江夏区"
+    assert W.strip_admin_prefix("江夏区") == "江夏区"      # 没有前缀可剥：原样
+    assert W.strip_admin_prefix("北京") == "北京"
+    assert W.strip_admin_prefix("上海市") == "上海市"      # 剥成空/单字时保留原名
+
+
+def test_search_name_variants_reach_the_district_name():
+    variants = W.search_name_variants("武汉江夏区")
+    assert "江夏" in variants and "江夏区" in variants
+    # 短路保护：变体数量有上界（每个变体一次请求）
+    assert len(variants) <= W.MAX_SEARCH_ATTEMPTS
+    assert W.search_name_variants("") == ()
+
+
+def test_address_style_search_falls_back_to_the_district_name():
+    """「武汉江夏区」逐级回退后必须命中「江夏 101200105」，而不是报搜不到。"""
+    import urllib.parse
+
+    q = lambda text: urllib.parse.quote(text)  # noqa: E731 - 测试内短别名
+    fake = _FakeHttp([
+        # 顺序即优先级：长键在前，短键（江夏）最后兜底——它是其它键的子串
+        (q("武汉江夏区"), "([])"),
+        (q("武汉江夏"), "([])"),
+        (q("汉江夏区"), "([])"),
+        (q("江夏区"), CN_SEARCH_江夏区_子单元),
+        (q("江夏"), CN_SEARCH_江夏),
+    ])
+    results, error = _client(fake).search_cities("武汉江夏区")
+    assert error == ""
+    assert results and results[0].code == "101200105" and results[0].name == "江夏"
+
+
+def test_district_query_never_picks_a_street_office():
+    """「江夏区」的首批候选全是子单元——必须落回「江夏」，不能选办事处。"""
+    import urllib.parse
+
+    q = lambda text: urllib.parse.quote(text)  # noqa: E731
+    fake = _FakeHttp([
+        (q("江夏区"), CN_SEARCH_江夏区_子单元),
+        (q("江夏"), CN_SEARCH_江夏),
+    ])
+    results, _ = _client(fake).search_cities("江夏区")
+    assert results and results[0].name == "江夏"
+
+
 def test_city_label_is_stable_under_normalization():
     """标签必须过一遍存储归一化——否则「（」被 NFKC 折成「(」会让地区码表对不上号。"""
     label = W.city_label("朝阳", "辽宁", ambiguous=True)
